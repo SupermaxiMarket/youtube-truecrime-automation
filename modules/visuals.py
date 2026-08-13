@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
 """
-Module visuels — Photos réelles + filtres cinématographiques.
-Utilise Picsum (gratuit, sans API) + effets dark. Fallback gradients si réseau HS.
+Module visuels — Télécharge de VRAIS clips vidéo depuis Pexels (gratuit).
+Besoin d'une clé API Pexels (gratuite, 2min sur pexels.com/api).
 """
 
+import json
 import os
 import re
-import random
-import math
-import numpy as np
-from PIL import Image, ImageFilter, ImageEnhance, ImageDraw, ImageFont, ImageOps
+import subprocess
 import urllib.request
+import urllib.parse
 import yaml
+
+
+# ── Mots-clés vidéo par thème ──
+VIDEO_KEYWORDS = {
+    "nuit": ["night city", "dark street", "night atmosphere", "rain night", "nocturnal"],
+    "crime_scene": ["police lights", "crime scene", "emergency", "dark forest", "mystery"],
+    "investigation": ["detective", "police station", "investigation", "office night", "documents"],
+    "portrait": ["person silhouette", "mysterious person", "dark portrait", "face shadow"],
+    "justice": ["courthouse", "justice", "courtroom", "lawyer", "judge"],
+    "evidence": ["documents", "evidence", "magnifying glass", "fingerprint", "clues"],
+    "conclusion": ["sunset", "dusk", "abandoned", "silence", "reflection"]
+}
 
 
 def load_config():
@@ -20,16 +31,21 @@ def load_config():
         return yaml.safe_load(f)
 
 
-# ── Thèmes visuels (palettes pour fallback) ──
-THEMES = {
-    "nuit": {"grain": 0.1, "vignette": 0.35, "blur": 0.8, "brightness": 0.75, "contrast": 1.15, "saturation": 0.65},
-    "crime_scene": {"grain": 0.15, "vignette": 0.4, "blur": 0.8, "brightness": 0.7, "contrast": 1.2, "saturation": 0.55},
-    "investigation": {"grain": 0.08, "vignette": 0.3, "blur": 0.5, "brightness": 0.8, "contrast": 1.1, "saturation": 0.75},
-    "portrait": {"grain": 0.06, "vignette": 0.25, "blur": 0.8, "brightness": 0.8, "contrast": 1.05, "saturation": 0.7},
-    "justice": {"grain": 0.04, "vignette": 0.3, "blur": 0.5, "brightness": 0.85, "contrast": 1.1, "saturation": 0.85},
-    "evidence": {"grain": 0.1, "vignette": 0.35, "blur": 0.5, "brightness": 0.75, "contrast": 1.15, "saturation": 0.6},
-    "conclusion": {"grain": 0.08, "vignette": 0.35, "blur": 0.8, "brightness": 0.7, "contrast": 1.1, "saturation": 0.65}
-}
+def get_api_key():
+    """Récupère la clé Pexels depuis .env ou variable d'environnement."""
+    import os
+    key = os.environ.get("PEXELS_API_KEY", "")
+    if not key:
+        # Chercher dans .env
+        env_paths = ["/root/.hermes/.env", "/root/.env", "/root/projets/youtube-automation/.env"]
+        for env_path in env_paths:
+            if os.path.exists(env_path):
+                with open(env_path) as f:
+                    for line in f:
+                        if line.startswith("PEXELS_API_KEY=") and not line.strip().startswith("#"):
+                            key = line.strip().split("=", 1)[1].strip().strip("'\"")
+                            return key
+    return key
 
 
 def detect_theme(prompt: str) -> str:
@@ -44,110 +60,90 @@ def detect_theme(prompt: str) -> str:
     return "nuit"
 
 
-def download_image(prompt: str, output_path: str, seed: int) -> bool:
-    """Télécharge une photo depuis Picsum (gratuit, sans clé)."""
-    urls = [
-        f"https://picsum.photos/seed/{seed}/{1920}/{1080}",
-        f"https://picsum.photos/{1920}/{1080}?random={seed}",
-    ]
-    for url in urls:
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                with open(output_path, 'wb') as f:
-                    f.write(resp.read())
-            if os.path.getsize(output_path) > 5000:
-                return True
-        except:
-            continue
-    return False
-
-
-def generate_fallback_background(width: int, height: int, seed: int) -> Image.Image:
-    """Génère un fond dégradé si le téléchargement échoue."""
-    rng = np.random.default_rng(seed)
-    y, x = np.mgrid[0:height, 0:width]
-    cx, cy = width // 2, height // 3
-    dist = np.sqrt((x - cx)**2 + (y - cy)**2)
-    max_dist = np.sqrt(cx**2 + cy**2)
-    ratio = (dist / max_dist).clip(0, 1)
+def search_pexels_video(query: str, api_key: str) -> list:
+    """Cherche des clips vidéo sur Pexels."""
+    params = urllib.parse.urlencode({
+        "query": query,
+        "per_page": 15,
+        "orientation": "landscape",
+        "size": "medium"
+    })
+    url = f"https://api.pexels.com/videos/search?{params}"
     
-    colors = np.array([[5, 5, 15], [10, 8, 20], [15, 10, 25], [8, 8, 18]], dtype=np.float64)
-    idx = (ratio * 3).astype(int)
-    local_ratio = (ratio * 3 - idx)[..., None]
-    c1 = colors[idx]
-    c2 = colors[np.minimum(idx + 1, 3)]
-    img_array = (c1 + (c2 - c1) * local_ratio).astype(np.uint8)
+    req = urllib.request.Request(url, headers={
+        "Authorization": api_key,
+        "User-Agent": "Mozilla/5.0"
+    })
     
-    grain = rng.normal(0, 30, (height, width, 1))
-    img_array = np.clip(img_array + grain, 0, 255).astype(np.uint8)
-    return Image.fromarray(img_array)
-
-
-def apply_cinematic_style(img: Image.Image, theme: str) -> Image.Image:
-    """Applique les filtres cinématographiques à une image réelle."""
-    style = THEMES.get(theme, THEMES["nuit"])
-    
-    # Assombrir
-    enhancer = ImageEnhance.Brightness(img)
-    img = enhancer.enhance(style["brightness"])
-    
-    # Contraste
-    enhancer = ImageEnhance.Contrast(img)
-    img = enhancer.enhance(style["contrast"])
-    
-    # Désaturation
-    enhancer = ImageEnhance.Color(img)
-    img = enhancer.enhance(style["saturation"])
-    
-    # Flou subtil
-    if style["blur"] > 0:
-        img = img.filter(ImageFilter.GaussianBlur(radius=style["blur"]))
-    
-    # Vignette (coins sombres)
-    w, h = img.size
-    cx, cy = w // 2, h // 2
-    max_dist = math.sqrt(cx**2 + cy**2)
-    pixels = img.load()
-    for y in range(h):
-        for x in range(w):
-            dist = math.sqrt((x - cx)**2 + (y - cy)**2)
-            factor = 1 - (dist / max_dist) * style["vignette"]
-            r, g, b = pixels[x, y]
-            pixels[x, y] = (int(r * factor), int(g * factor), int(b * factor))
-    
-    # Letterbox
-    draw = ImageDraw.Draw(img)
-    bar = int(h * 0.07)
-    draw.rectangle([(0, 0), (w, bar)], fill=(0, 0, 0))
-    draw.rectangle([(0, h - bar), (w, h)], fill=(0, 0, 0))
-    
-    return img
-
-
-def add_text(img: Image.Image, text: str) -> Image.Image:
-    """Ajoute un texte contextuel discret."""
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", 32)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+            return data.get("videos", [])
+    except Exception as e:
+        print(f"   ⚠️  Pexels search error: {e}")
+        return []
+
+
+def download_pexels_clip(pexels_video: dict, output_path: str) -> str:
+    """Télécharge le clip en 720p (bon équilibre qualité/taille)."""
+    # Priorité : 1280x720 HD > 1920x1080 > 960x540 > 640x360
+    # Éviter le 4K (trop lourd)
+    preferred = [
+        (1280, 720),   # 720p HD - idéal
+        (1920, 1080),  # 1080p - acceptable
+        (960, 540),    # 540p - fallback
+        (640, 360),    # 360p - dernier recours
+    ]
+    
+    best = None
+    for pw, ph in preferred:
+        for vf in pexels_video.get("video_files", []):
+            if vf.get("width") == pw and vf.get("height") == ph:
+                best = vf
+                break
+        if best:
+            break
+    
+    # Fallback : max 1080p
+    if not best:
+        for vf in pexels_video.get("video_files", []):
+            w = vf.get("width", 0)
+            if w <= 1920 and (not best or w > best.get("width", 0)):
+                best = vf
+    
+    if not best:
+        return None
+    
+    link = best.get("link")
+    if not link:
+        return None
+    
+    try:
+        req = urllib.request.Request(link, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            with open(output_path, "wb") as f:
+                f.write(resp.read())
+        
+        if os.path.getsize(output_path) > 10000:
+            return output_path
+    except Exception as e:
+        print(f"   ⚠️  Download failed: {e}")
+    
+    return None
+
+
+def get_video_duration(video_path: str) -> float:
+    """Récupère la durée d'un clip vidéo."""
+    cmd = [
+        "ffprobe", "-v", "quiet",
+        "-print_format", "json",
+        "-show_format", video_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    try:
+        return float(json.loads(result.stdout)["format"]["duration"])
     except:
-        font = ImageFont.load_default()
-    
-    draw = ImageDraw.Draw(img)
-    text = text[:55]
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    h = img.size[1]
-    m = 10
-    
-    overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-    overlay_draw = ImageDraw.Draw(overlay)
-    overlay_draw.rectangle([(20, h - 60), (20 + tw + m*2, h - 16)], fill=(0, 0, 0, 160))
-    img = img.convert('RGBA')
-    img = Image.alpha_composite(img, overlay)
-    img = img.convert('RGB')
-    draw = ImageDraw.Draw(img)
-    draw.text((20 + m, h - 50), text, fill=(210, 210, 210), font=font)
-    return img
+        return 0.0
 
 
 def extract_image_prompts(script: str) -> list:
@@ -156,7 +152,18 @@ def extract_image_prompts(script: str) -> list:
 
 
 def prepare_visuals(script_path: str, script_text: str = None) -> list:
-    """Génère les visuels : photos réelles + filtres cinéma. Fallback gradients."""
+    """
+    Télécharge de vrais clips vidéo depuis Pexels pour chaque scène.
+    """
+    api_key = get_api_key()
+    if not api_key:
+        raise RuntimeError(
+            "❌ PEXELS_API_KEY manquante !\n\n"
+            "Va sur https://www.pexels.com/api/ → Join Free → inscris-toi → reçois ta clé\n"
+            "Puis ajoute-la dans /root/projets/youtube-automation/.env :\n"
+            "  PEXELS_API_KEY=ta_clé_ici"
+        )
+    
     if script_text is None:
         with open(script_path) as f:
             script_text = f.read()
@@ -169,52 +176,119 @@ def prepare_visuals(script_path: str, script_text: str = None) -> list:
     
     prompts = extract_image_prompts(clean_script)
     if not prompts:
-        prompts = ["nuit, crime", "enquête", "portrait", "crime scene", "investigation", "preuve", "justice", "fin"]
+        prompts = ["night city", "investigation", "mysterious person", "crime", "police", "evidence", "justice", "conclusion"]
     
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     output_dir = f"{base}/output/visuals"
     os.makedirs(output_dir, exist_ok=True)
     
-    image_paths = []
-    print(f"📷 Téléchargement de {len(prompts)} photos + filtres cinéma...")
+    clip_paths = []
+    print(f"🎬 Téléchargement de {len(prompts)} clips vidéo Pexels...")
     
     for i, prompt in enumerate(prompts):
         theme = detect_theme(prompt)
-        seed = abs(hash(prompt + str(i))) % 100000
         safe_name = re.sub(r'[^\w\s-]', '', prompt)[:25].strip().replace(' ', '_')
-        filepath = f"{output_dir}/{i:02d}_{theme}_{safe_name}.jpg"
+        filepath = f"{output_dir}/{i:02d}_{theme}_{safe_name}.mp4"
         
-        if os.path.exists(filepath) and os.path.getsize(filepath) > 5000:
-            img = Image.open(filepath).convert("RGB")
+        # Si déjà téléchargé et valide, réutiliser
+        if os.path.exists(filepath) and os.path.getsize(filepath) > 10000:
+            clip_paths.append(filepath)
+            dots = "•" * (i + 1) + " " * (len(prompts) - i - 1)
+            print(f"   [{dots}] ♻️  {theme} - {prompt[:35]}... (cache)", end="\r")
+            continue
+        
+        # Chercher un clip sur Pexels
+        keywords = VIDEO_KEYWORDS.get(theme, ["mystery", "dark"])
+        query = keywords[i % len(keywords)] if keywords else prompt
+        
+        videos = search_pexels_video(query, api_key)
+        
+        downloaded = None
+        for video in videos:
+            downloaded = download_pexels_clip(video, filepath)
+            if downloaded:
+                break
+        
+        if downloaded:
+            clip_paths.append(filepath)
+            status = "🎬"
         else:
-            # Télécharger une photo réelle
-            ok = download_image(prompt, filepath, seed)
-            if ok:
-                img = Image.open(filepath).convert("RGB")
-                img = img.resize((1920, 1080), Image.LANCZOS)
-            else:
-                # Fallback gradient
-                img = generate_fallback_background(1920, 1080, seed)
+            # Fallback : image statique transformée en clip (fondu)
+            fallback_path = filepath.replace(".mp4", "_fallback.mp4")
+            _create_fallback_clip(fallback_path, theme, i)
+            clip_paths.append(fallback_path)
+            status = "🎨"
         
-        # Appliquer le style cinématographique
-        img = apply_cinematic_style(img, theme)
-        img = add_text(img, prompt[:50])
-        img.save(filepath, 'JPEG', quality=92)
-        image_paths.append(filepath)
-        
-        status = "📷" if os.path.getsize(filepath) > 50000 else "🎨"
         dots = "•" * (i + 1) + " " * (len(prompts) - i - 1)
         print(f"   [{dots}] {status} {theme} - {prompt[:35]}...", end="\r")
     
-    print(f"\n   ✓ {len(image_paths)} visuels prêts")
-    return image_paths
+    print(f"\n   ✓ {len(clip_paths)} clips vidéo prêts")
+    return clip_paths
+
+
+def _create_fallback_clip(output_path: str, theme: str, seed: int):
+    """Crée un clip de fallback avec un dégradé animé (léger mouvement)."""
+    import numpy as np
+    from PIL import Image
+    
+    colors = {
+        "nuit": [(5, 5, 15), (10, 8, 20)],
+        "crime_scene": [(15, 5, 5), (20, 8, 8)],
+        "investigation": [(10, 10, 20), (15, 15, 30)],
+        "justice": [(10, 10, 15), (18, 15, 22)],
+        "evidence": [(5, 5, 10), (12, 8, 15)],
+    }.get(theme, [(5, 5, 15), (10, 8, 20)])
+    
+    # Générer 30 frames d'un dégradé qui pulse doucement
+    frames_dir = "/tmp/fallback_frames"
+    os.makedirs(frames_dir, exist_ok=True)
+    
+    w, h = 1920, 1080
+    rng = np.random.default_rng(seed)
+    
+    for frame in range(30):
+        img = Image.new('RGB', (w, h), colors[0])
+        draw = ImageDraw = __import__('PIL').ImageDraw.Draw(img)
+        
+        # Vague lente
+        offset = (frame / 30) * 50
+        for y in range(h):
+            factor = (y + offset) / (h + 50)
+            idx = min(int(factor * len(colors)), len(colors) - 1)
+            c = colors[idx]
+            draw.line([(0, y), (w, y)], fill=c)
+        
+        # Grain
+        grain = rng.normal(0, 20, (h, w, 3)).astype(np.uint8)
+        img_arr = np.array(img).astype(np.int16)
+        img_arr = np.clip(img_arr + grain[:,:,0:1], 0, 255).astype(np.uint8)
+        Image.fromarray(img_arr).save(f"{frames_dir}/{frame:04d}.png")
+    
+    # Assembler les frames en vidéo
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "quiet",
+        "-framerate", "30",
+        "-i", f"{frames_dir}/%04d.png",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-vf", "scale=1920:1080",
+        "-t", "5",
+        output_path
+    ], timeout=30)
 
 
 if __name__ == "__main__":
     import sys
+    key = get_api_key()
+    if key:
+        print(f"✓ PEXELS_API_KEY trouvée: {key[:8]}...{key[-4:]}")
+    else:
+        print("❌ PEXELS_API_KEY manquante")
+        print("Va sur https://www.pexels.com/api/ → Join Free → inscris-toi")
+        print("Puis: echo 'PEXELS_API_KEY=ta_clé' > /root/projets/youtube-automation/.env")
+    
     if len(sys.argv) > 1:
         paths = prepare_visuals(sys.argv[1])
         for p in paths:
-            print(f"  • {p}")
-    else:
-        print("Usage: python visuals.py <script_file>")
+            dur = get_video_duration(p)
+            print(f"  • {os.path.basename(p)} ({dur:.1f}s)")

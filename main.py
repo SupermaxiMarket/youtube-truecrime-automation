@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import os
+import subprocess
 import sys
 import yaml
 from datetime import datetime
@@ -82,29 +83,35 @@ def run_pipeline(topic: str = None, script_only: bool = False,
     audio_path = text_to_speech(clean_text)
     result["audio"] = audio_path
     
-    # 3. VISUELS
+    # 3. VISUELS (clips vidéo Pexels)
     print(f"\n{'='*60}")
-    print("🖼️  ÉTAPE 3/4 — Préparation des visuels")
+    print("🎬 ÉTAPE 3/4 — Téléchargement clips vidéo")
     print(f"{'='*60}")
     from modules.visuals import prepare_visuals
-    image_paths = prepare_visuals(script_path, script_text)
-    result["visuals"] = image_paths
+    video_clips = prepare_visuals(script_path, script_text)
+    result["clips"] = video_clips
     
-    # 4. VIDÉO
+    # 4. VIDÉO (assemblage avec vrais clips)
     print(f"\n{'='*60}")
     print("🎬 ÉTAPE 4/4 — Assemblage vidéo")
     print(f"{'='*60}")
     from modules.video import assemble_video
-    video_path = assemble_video(audio_path, image_paths)
+    video_path = assemble_video(audio_path, video_clips)
     result["video"] = video_path
     
-    # 5. MINIATURE
+    # 5. MINIATURE (à partir du premier clip)
     print(f"\n{'='*60}")
     print("🖼️  ÉTAPE FINALE — Création miniature")
     print(f"{'='*60}")
     from modules.thumbnail import create_thumbnail
-    first_image = image_paths[0] if image_paths else None
-    thumb_path = create_thumbnail(result.get("title", "True Crime"), first_image)
+    first_frame = "/tmp/thumb_frame.jpg"
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "quiet",
+        "-ss", "0:01", "-i", video_clips[0],
+        "-frames:v", "1", "-q:v", "3", first_frame
+    ], timeout=10)
+    thumb_path = create_thumbnail(result.get("title", "True Crime"), 
+                                   first_frame if os.path.exists(first_frame) else None)
     result["thumbnail"] = thumb_path
     
     # Résumé final
