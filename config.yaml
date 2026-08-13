@@ -1,0 +1,39 @@
+# ── Configuration chaîne True Crime automatisée ──
+
+channel:
+  name: "Crimes & Ténèbres"          # Nom de la chaîne
+  language: "fr-FR"                   # Langue
+  locale: "fr-CH"                     # Localisation (Suisse romande)
+  description: "Histoires criminelles racontées façon thriller. Affaires classées, cold cases, et。
+psychologie du mal."
+
+voice:
+  engine: "edge-tts"                  # edge-tts, elevenlabs, openai
+  voice: "fr-FR-DeniseNeural"         # Voix française edge-tts
+  # Alternatives: fr-FR-HenriNeural, fr-FR-CharlineNeural, fr-FR-MauriceNeural
+  rate: "+0%"                         # Vitesse (+/-%)
+  pitch: "+0Hz"                       # Ton
+
+visuals:
+  style: "dark_cinematic"            # Style d'images
+  source: "unsplash"                  # unsplash, pexels, ai
+  resolution: "1920x1080"
+  ken_burns_zoom: 1.05               # Zoom léger pour effet cinéma
+  transition_duration: 0.5           # Secondes entre images
+
+video:
+  fps: 30
+  min_duration: 480                  # 8 minutes minimum (monétisation)
+  max_duration: 900                  # 15 minutes max
+  background_music: "dark_ambient"   # Piste audio fond
+  bg_volume: 0.15                    # Volume musique fond (0-1)
+
+output:
+  format: "mp4"
+  codec: "libx264"
+  bitrate: "8M"
+
+
+model:
+  script: "deepseek-v4-flash:0731-cloud"  # ou "nvidia/nemotron-3-ultra-550b-a55b:free"
+  provider: "ollama"                  # ollama, openrouter, openai
