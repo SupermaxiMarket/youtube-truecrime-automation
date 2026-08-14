@@ -121,7 +121,7 @@ def run_pipeline(topic: str = None, script_only: bool = False,
     print(f"   Titre     : {result.get('title', 'N/A')}")
     print(f"   Script    : {result.get('script', 'N/A')}")
     print(f"   Audio     : {result.get('audio', 'N/A')}")
-    print(f"   Visuels   : {len(result.get('visuals', []))} images")
+    print(f"   Visuels   : {len(result.get('clips', []))} clips")
     print(f"   Vidéo     : {result.get('video', 'N/A')}")
     print(f"   Miniature : {result.get('thumbnail', 'N/A')}")
     video_size = os.path.getsize(video_path) / (1024*1024) if os.path.exists(video_path) else 0
@@ -129,6 +129,25 @@ def run_pipeline(topic: str = None, script_only: bool = False,
     print(f"{'='*60}")
     
     result["status"] = "complete"
+    return result
+
+
+def upload_to_youtube(result: dict, privacy: str = "unlisted") -> dict:
+    """Upload la vidéo produite sur YouTube."""
+    from modules.upload_youtube import upload_video
+    
+    video_path = result.get("video")
+    title = result.get("title", "True Crime")
+    # Charger le script pour la description
+    script_text = ""
+    script_path = result.get("script")
+    if script_path and os.path.exists(script_path):
+        with open(script_path) as f:
+            script_text = f.read()
+    
+    upload_result = upload_video(video_path, title, script_text, privacy=privacy)
+    result["youtube_url"] = upload_result["url"]
+    result["youtube_id"] = upload_result["video_id"]
     return result
 
 
@@ -142,6 +161,8 @@ Exemples:
   python main.py --topic "L'Affaire du Pont du Diable — Deux Disparus Sans Traces"
   python main.py --script-only
   python main.py --resume output/scripts/20260812_143000_L_affaire_du_pont.txt
+  python main.py --upload                         # Génère + upload
+  python main.py --upload --privacy public       # Upload en public
         """
     )
     parser.add_argument("--topic", type=str, help="Sujet de la vidéo")
@@ -149,6 +170,11 @@ Exemples:
                        help="Générer uniquement le script")
     parser.add_argument("--resume", type=str,
                        help="Reprendre à partir d'un script existant")
+    parser.add_argument("--upload", action="store_true",
+                       help="Uploader sur YouTube après génération")
+    parser.add_argument("--privacy", type=str, default="unlisted",
+                       choices=["public", "unlisted", "private"],
+                       help="Confidentialité YouTube (défaut: unlisted)")
     
     args = parser.parse_args()
     
@@ -157,6 +183,10 @@ Exemples:
         script_only=args.script_only,
         resume_script=args.resume
     )
+    
+    # Upload YouTube si demandé
+    if args.upload and result.get("video"):
+        result = upload_to_youtube(result, privacy=args.privacy)
     
     return result
 
