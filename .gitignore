@@ -10,6 +10,10 @@ output/scripts/.gitkeep
 .env
 *.env
 
+# Secrets YouTube (NE JAMAIS committer)
+client_secret.json
+output/youtube_token.pickle
+
 # Python
 __pycache__/
 *.pyc
