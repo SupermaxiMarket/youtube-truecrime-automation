@@ -29,8 +29,9 @@ def get_output_base():
 
 
 def run_pipeline(topic: str = None, script_only: bool = False,
-                 resume_script: str = None) -> dict:
-    """Exécute le pipeline complet."""
+                 resume_script: str = None,
+                 external_script: str = None, external_title: str = None) -> dict:
+    """Exécute le pipeline complet. external_script/title = mode série."""
     base = get_output_base()
     
     # Ajouter le dossier modules au path
@@ -39,7 +40,18 @@ def run_pipeline(topic: str = None, script_only: bool = False,
     result = {"topic": topic or "auto-généré"}
     
     # 1. SCRIPT
-    if resume_script and os.path.exists(resume_script):
+    if external_script and external_title:
+        print(f"\n{'='*60}")
+        print("📜 ÉTAPE 1/4 — Script fourni (mode série)")
+        print(f"{'='*60}")
+        script_text = external_script
+        result["title"] = external_title
+        from modules.script import save_script
+        script_path = save_script(external_title, script_text)
+        result["script"] = script_path
+        print(f"   ✓ Titre : {result['title']}")
+        print(f"   ✓ Script : {len(script_text)} chars")
+    elif resume_script and os.path.exists(resume_script):
         print(f"\n{'='*60}")
         print("📜 ÉTAPE 1/4 — Reprise du script existant")
         print(f"{'='*60}")
@@ -149,7 +161,8 @@ def run_pipeline(topic: str = None, script_only: bool = False,
     return result
 
 
-def upload_to_youtube(result: dict, privacy: str = "unlisted") -> dict:
+def upload_to_youtube(result: dict, privacy: str = "unlisted",
+                      custom_description: str = None) -> dict:
     """Upload la vidéo produite sur YouTube."""
     from modules.upload_youtube import upload_video
     
@@ -162,9 +175,92 @@ def upload_to_youtube(result: dict, privacy: str = "unlisted") -> dict:
         with open(script_path) as f:
             script_text = f.read()
     
-    upload_result = upload_video(video_path, title, script_text, privacy=privacy)
+    if custom_description:
+        # Utiliser la description fournie + tags standard
+        from modules.upload_youtube import get_authenticated_service
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
+        import os as _os
+        upload_result = upload_video(
+            video_path, title, script_text, privacy=privacy,
+            custom_description=custom_description
+        )
+    else:
+        upload_result = upload_video(video_path, title, script_text, privacy=privacy)
     result["youtube_url"] = upload_result["url"]
     result["youtube_id"] = upload_result["video_id"]
+    return result
+
+
+def run_series(topic: str = None, upload: bool = False,
+               privacy: str = "unlisted",
+               publish_at_parts: dict = None) -> dict:
+    """Génère les 2 épisodes d'une affaire (mode série).
+
+    Args:
+        topic: Sujet spécifique (None = auto)
+        upload: Uploader sur YouTube
+        privacy: public | unlisted | private
+        publish_at_parts: {"part1": "2026-08-18T12:00:00+02:00", "part2": ...}
+            → planifie la publication automatique (privacy passe en private)
+    """
+    from modules.series import (
+        generate_episode_scripts, load_state, save_state, build_descriptions
+    )
+    
+    state = load_state()
+    scripts = generate_episode_scripts(topic, state)
+    
+    print(f"\n{'#'*60}")
+    print(f"🎬 SÉRIE : {scripts['topic']}")
+    print(f"   Épisode {scripts['episode_nums']['part1']} (1/2) + Épisode {scripts['episode_nums']['part2']} (2/2)")
+    print(f"{'#'*60}")
+    
+    result = {"topic": scripts["topic"], "episodes": []}
+    urls = {}
+    
+    for part, label in [("part1", "Partie 1/2"), ("part2", "Partie 2/2")]:
+        print(f"\n{'#'*60}")
+        print(f"▶ {label} — Épisode {scripts['episode_nums'][part]}")
+        print(f"{'#'*60}")
+        
+        ep_result = run_pipeline(
+            external_script=scripts[part],
+            external_title=scripts["titles"][part]
+        )
+        
+        # Upload avec description croisée
+        if upload and ep_result.get("video"):
+            # Planification de publication si demandée
+            if publish_at_parts and publish_at_parts.get(part):
+                os.environ["YOUTUBE_PUBLISH_AT"] = publish_at_parts[part]
+            descriptions = build_descriptions(scripts, urls)
+            ep_result = upload_to_youtube(
+                ep_result, privacy=privacy,
+                custom_description=descriptions[part]
+            )
+            os.environ.pop("YOUTUBE_PUBLISH_AT", None)
+            urls[part] = ep_result.get("youtube_url")
+            print(f"\n   🔗 {ep_result.get('youtube_url')}")
+        
+        result["episodes"].append(ep_result)
+    
+    # Mettre à jour l'état de la série
+    state["next_episode"] = scripts["episode_nums"]["part2"] + 1
+    state["history"].append({
+        "topic": scripts["topic"],
+        "episodes": [scripts["episode_nums"]["part1"], scripts["episode_nums"]["part2"]],
+        "date": datetime.now().isoformat(),
+        "urls": urls
+    })
+    save_state(state)
+    
+    print(f"\n{'#'*60}")
+    print(f"✅ SÉRIE TERMINÉE — Prochain épisode : {state['next_episode']}")
+    print(f"{'#'*60}")
+    
+    result["status"] = "complete"
+    result["state"] = state
     return result
 
 
@@ -192,8 +288,19 @@ Exemples:
     parser.add_argument("--privacy", type=str, default="unlisted",
                        choices=["public", "unlisted", "private"],
                        help="Confidentialité YouTube (défaut: unlisted)")
+    parser.add_argument("--series", action="store_true",
+                       help="Mode série : 2 épisodes d'une affaire (1/2 + 2/2)")
     
     args = parser.parse_args()
+    
+    # Mode série : 2 épisodes
+    if args.series:
+        result = run_series(
+            topic=args.topic,
+            upload=args.upload,
+            privacy=args.privacy
+        )
+        return result
     
     result = run_pipeline(
         topic=args.topic,

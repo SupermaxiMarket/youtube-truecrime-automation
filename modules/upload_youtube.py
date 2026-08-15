@@ -136,7 +136,8 @@ def extract_metadata(script_text: str, title: str = "") -> dict:
 
 
 def upload_video(video_path: str, title: str, script_text: str = "",
-                 privacy: str = "unlisted", category_id: str = "27") -> dict:
+                 privacy: str = "unlisted", category_id: str = "27",
+                 custom_description: str = None) -> dict:
     """
     Upload une vidéo sur YouTube.
 
@@ -146,6 +147,7 @@ def upload_video(video_path: str, title: str, script_text: str = "",
         script_text: Texte du script pour générer description + tags
         privacy: public | unlisted | private
         category_id: 27=Education, 22=People, 24=Entertainment, 26=Howto
+        custom_description: Description explicite (mode série, liens croisés)
 
     Returns:
         {"video_id": "...", "url": "https://youtube.com/watch?v=..."}
@@ -161,7 +163,13 @@ def upload_video(video_path: str, title: str, script_text: str = "",
     youtube = get_authenticated_service()
 
     # Métadonnées
-    meta = extract_metadata(script_text, title)
+    if custom_description:
+        meta = {
+            "description": custom_description[:5000],
+            "tags": extract_metadata(script_text, title)["tags"],
+        }
+    else:
+        meta = extract_metadata(script_text, title)
 
     if len(title) > 100:
         title = title[:97] + "..."
@@ -181,6 +189,15 @@ def upload_video(video_path: str, title: str, script_text: str = "",
             "madeForKids": False
         }
     }
+
+    # Planification de publication (publishAt) — nécessite privacy=private
+    publish_at = os.environ.get("YOUTUBE_PUBLISH_AT")
+    if publish_at:
+        if privacy != "private":
+            privacy = "private"
+            body["status"]["privacyStatus"] = "private"
+        body["status"]["publishAt"] = publish_at
+        print(f"   ⏰ Publication planifiée : {publish_at}")
 
     # Upload resumable (5MB chunks, reprend si coupure)
     media = MediaFileUpload(
