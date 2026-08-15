@@ -83,6 +83,23 @@ def run_pipeline(topic: str = None, script_only: bool = False,
     audio_path = text_to_speech(clean_text)
     result["audio"] = audio_path
     
+    # 2b. FOND SONORE AMBIENT (dark drone)
+    config = load_config()
+    if config.get("ambient", {}).get("enabled", True):
+        print(f"\n{'='*60}")
+        print("🌑 ÉTAPE 2b — Fond sonore dark ambient")
+        print(f"{'='*60}")
+        from modules.ambient import generate_ambient, mix_voice_with_ambient
+        
+        # Générer ou récupérer le fond (10 min cache)
+        ambient_path = generate_ambient(720)  # 12 min, couvre toutes les vidéos
+        
+        # Mixer voix + fond
+        ambient_vol = config.get("ambient", {}).get("volume", 0.10)
+        mixed_audio = mix_voice_with_ambient(audio_path, ambient_path, ambient_vol)
+        audio_path = mixed_audio
+        result["audio"] = audio_path
+    
     # 3. VISUELS (clips vidéo Pexels)
     print(f"\n{'='*60}")
     print("🎬 ÉTAPE 3/4 — Téléchargement clips vidéo")

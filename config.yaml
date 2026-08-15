@@ -28,6 +28,11 @@ video:
   background_music: "dark_ambient"   # Piste audio fond
   bg_volume: 0.15                    # Volume musique fond (0-1)
 
+ambient:
+  enabled: true                       # Activer le fond sonore dark ambient
+  volume: 0.10                        # Volume du fond (0-1, 10% = discret)
+  cache: true                         # Réutiliser le fond généré entre vidéos
+
 output:
   format: "mp4"
   codec: "libx264"
